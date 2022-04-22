@@ -1,0 +1,126 @@
+# Definicion de parametros
+Parameters:
+
+  project:
+    Description: Nombre del proyecto.
+    Type: String
+    Default: gestion-precios
+  environment:
+    Description: Ambiente donde se despliega.
+    Type: String
+    Default: dev
+  applicationcode:
+    Description: Codigo AW de la aplicacion.
+    Type: String
+    Default: nu0091001
+  pmo:
+    Description: PMO del proyecto de la aplicacion.
+    Type: String
+    Default: PMO27524
+  costcenter:
+    Description: Centro de costos. 
+    Type: String
+    Default: C103500245
+  businessservice:
+    Description: Nombre del componente mayor al que pertenece la aplicacion.
+    Type: String
+    Default: prueba
+  APIGatewayMtlsTrustsoreVersion:
+    Description: Define la vesion del bucket
+    Type: String
+    Default: v1
+
+Resources:
+
+  ###################### Se crea el Api gateway
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name:
+        !Join ["-", [!Ref applicationcode, !Ref project, !Ref environment, api]]
+      Description: Http api gateway.
+      ProtocolType: HTTP
+      DisableExecuteApiEndpoint: true #Desactiva el endpoint por defecto que genera api gateway 
+
+  ##################### Se define las configuraciones del stage y el formato de los logs
+  defaultApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: Live
+      Description: Live Stage
+      AutoDeploy: true
+
+  #################### Se crea y configura un nombre de dominio personalizado
+  MTLSDomainName:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: pricing-business.sondevelopers.click
+      MutualTlsAuthentication:
+        TruststoreUri: "s3://nu0091001-gestion-precios-mtls-dev/truststore.pem"
+        TruststoreVersion: "ByRHdWG8StXq7RiiYJXPDA6mhniTfYa2"
+      DomainNameConfigurations:
+        - EndpointType: REGIONAL
+          CertificateArn: arn:aws:acm:us-east-1:886639640718:certificate/df66fa56-ce78-4028-aaa2-e16ba17d7169
+          SecurityPolicy: "TLS_1_2"
+  
+  HttpApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: !Ref MTLSDomainName
+      ApiId: !Ref HttpApi
+      Stage: !Ref defaultApiStage
+
+  DemoRecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: Z00700357MVVJS31FJWV
+      RecordSets:
+        - Name: pricing-business.sondevelopers.click
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt MTLSDomainName.RegionalDomainName
+            HostedZoneId: !GetAtt MTLSDomainName.RegionalHostedZoneId
+
+  ############ se crea vpc link
+  HttpApiVPCLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties: 
+      Name: "VpcLinkForApiGW"
+      SecurityGroupIds: 
+        - "sg-0f3da3a25c666c507"
+      SubnetIds: 
+        - "subnet-052d721ffd54c9afd"
+        - "subnet-052d721ffd54c9afd"
+        - "subnet-00a5a2d295ff2ebd5"
+        - "subnet-00a5a2d295ff2ebd5"
+        - "subnet-077e118245ce2379d"
+
+#  ##### Genera la integración entre la Api y el balanceador alb de eks por medio de un VPC Link
+#  ##### que ya se encuentra creado en cada cuenta
+  ApiGatewayIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    DependsOn: HttpApiVPCLink
+    Properties:
+      ApiId: !Ref HttpApi
+      ConnectionId: !Ref HttpApiVPCLink
+      Description: Private Resource - ALB Integration
+      ConnectionType: VPC_LINK
+      PayloadFormatVersion: 1.0
+      IntegrationMethod: ANY ##### Pendiente definir
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: !Ref ArnListenerALB
+      TlsConfig:
+        ServerNameToVerify: !Ref MTLSDomainName
+  
+  ############################ Ruta
+  HttpApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /gestion-precios/api/pricing-business/v1/information/prueba-eks"
+      AuthorizationType: NONE
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref ApiGatewayIntegration

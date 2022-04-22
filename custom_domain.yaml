@@ -1,0 +1,173 @@
+Parameters:
+
+  project:
+    Description: Nombre del proyecto.
+    Type: String
+    Default: gestion-precios
+  environment:
+    Description: Ambiente donde se despliega.
+    Type: String
+    Default: dev
+  applicationcode:
+    Description: Codigo AW de la aplicacion.
+    Type: String
+    Default: nu0091001
+
+Resources:
+
+  #### Se crea el Bucket S3 donde se va a cargar el trustore.pem de la validación del mTLS
+#  S3BucketMtls:
+#      Type: AWS::S3::Bucket
+#      Properties:
+#        BucketName:
+#          !Join ["-", [!Ref applicationcode, !Ref project, mtls, !Ref environment]]
+#        BucketEncryption:
+#          ServerSideEncryptionConfiguration:
+#            - ServerSideEncryptionByDefault:
+#                SSEAlgorithm: aws:kms
+#        AccessControl: Private
+#        PublicAccessBlockConfiguration:
+#          BlockPublicAcls: true
+#          BlockPublicPolicy: true
+#          IgnorePublicAcls: true
+#          RestrictPublicBuckets: true
+#        VersioningConfiguration:
+#          Status: Enabled
+#
+#  CommandRunner:
+#      DependsOn: S3BucketMtls
+#      Type: AWSUtility::CloudFormation::CommandRunner
+#      Properties:
+#         Command: aws s3 cp truststore.pem s3://nu0091001-gestion-precios-mtls-dev/
+
+  ###################### Se crea el Api gateway
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name:
+        !Join ["-", [!Ref applicationcode, !Ref project, !Ref environment, api]]
+      Description: Http api gateway.
+      ProtocolType: HTTP
+      DisableExecuteApiEndpoint: true #Desactiva el endpoint por defecto que genera api gateway
+
+  ################### Mapea la api y el stage al dns escogido para exponerle al consumidor
+  HttpApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn:  defaultApiStage
+    Properties:
+      DomainName: !Ref MTLSDomainName
+      ApiId: !Ref HttpApi
+      Stage: !Ref defaultApiStage
+
+  ######### Crea el loggroup en el que se van a guardar los logs del api gateway
+  ApiGatewayLogsGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: HttpApi
+    Properties:
+      LogGroupName:
+        !Join [ "-", [ !Ref applicationcode, !Ref project, !Ref environment, api,log-group ] ]
+      RetentionInDays: 30
+
+  ################### Se define las configuraciones del stage y el formato de los logs
+  defaultApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn: ApiGatewayLogsGroup
+    Properties:
+      StageName: mtlApigwstage
+      ApiId: !Ref HttpApi
+      AutoDeploy: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiGatewayLogsGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId", "ip": "$context.identity.sourceIp",
+          "caller":"$context.identity.caller",
+          "user":"$context.identity.user","requestTime":"$context.requestTime",
+          "routeKey":"$context.routeKey","status":"$context.status",
+          "integrationMessage":"$context.integrationErrorMessage","contextPath":"$context.path"}
+
+  #################### Se crea y configura un nombre de dominio personalizado
+  MTLSDomainName:
+    Type: AWS::ApiGatewayV2::DomainName
+#    DependsOn: S3BucketMtls
+    Properties:
+      DomainName: pricing-business.sondevelopers.click
+#      MutualTlsAuthentication:
+#        TruststoreUri: "s3://nu0091001-gestion-precios-mtls-dev/truststore.pem"
+#        TruststoreVersion: "ByRHdWG8StXq7RiiYJXPDA6mhniTfYa2"
+      DomainNameConfigurations:
+        - EndpointType: REGIONAL
+          CertificateArn: arn:aws:acm:us-east-1:886639640718:certificate/df66fa56-ce78-4028-aaa2-e16ba17d7169
+          SecurityPolicy: "TLS_1_2"
+
+  DemoRecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: Z00700357MVVJS31FJWV
+      RecordSets:
+        - Name: pricing-business.sondevelopers.click
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt MTLSDomainName.RegionalDomainName
+            HostedZoneId: !GetAtt MTLSDomainName.RegionalHostedZoneId
+
+  ############################################# Lambdas
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+  
+  mtlsLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: 
+      - LambdaExecutionRole
+    Properties:
+      FunctionName: mtlsLambdaFunction
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.7
+      Handler: index.my_handler
+      Code:
+        ZipFile: |
+          def my_handler(event, context):
+            message = 'Que mas pues cristian'
+            return message
+  
+  HelloWordLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref mtlsLambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: apigateway.amazonaws.com
+  
+  ############################ Se integra la lambda con el http api
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      Description: Lambda proxy integration
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      PayloadFormatVersion: "2.0"
+      IntegrationUri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${mtlsLambdaFunction.Arn}/invocations'
+
+  ############################ Ruta
+  HttpApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "GET /"
+      AuthorizationType: NONE
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref HttpApiIntegration
