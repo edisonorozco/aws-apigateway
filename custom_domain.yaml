@@ -15,31 +15,6 @@ Parameters:
 
 Resources:
 
-  #### Se crea el Bucket S3 donde se va a cargar el trustore.pem de la validación del mTLS
-#  S3BucketMtls:
-#      Type: AWS::S3::Bucket
-#      Properties:
-#        BucketName:
-#          !Join ["-", [!Ref applicationcode, !Ref project, mtls, !Ref environment]]
-#        BucketEncryption:
-#          ServerSideEncryptionConfiguration:
-#            - ServerSideEncryptionByDefault:
-#                SSEAlgorithm: aws:kms
-#        AccessControl: Private
-#        PublicAccessBlockConfiguration:
-#          BlockPublicAcls: true
-#          BlockPublicPolicy: true
-#          IgnorePublicAcls: true
-#          RestrictPublicBuckets: true
-#        VersioningConfiguration:
-#          Status: Enabled
-#
-#  CommandRunner:
-#      DependsOn: S3BucketMtls
-#      Type: AWSUtility::CloudFormation::CommandRunner
-#      Properties:
-#         Command: aws s3 cp truststore.pem s3://nu0091001-gestion-precios-mtls-dev/
-
   ###################### Se crea el Api gateway
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
@@ -90,12 +65,11 @@ Resources:
   #################### Se crea y configura un nombre de dominio personalizado
   MTLSDomainName:
     Type: AWS::ApiGatewayV2::DomainName
-#    DependsOn: S3BucketMtls
     Properties:
       DomainName: pricing-business.sondevelopers.click
-#      MutualTlsAuthentication:
-#        TruststoreUri: "s3://nu0091001-gestion-precios-mtls-dev/truststore.pem"
-#        TruststoreVersion: "ByRHdWG8StXq7RiiYJXPDA6mhniTfYa2"
+      MutualTlsAuthentication:
+        TruststoreUri: "s3://nu0091001-gestion-precios-mtls-dev/truststore.pem"
+        TruststoreVersion: "kkSsl8tSnBU8RNisSvjToFmyD2sZtIyd"
       DomainNameConfigurations:
         - EndpointType: REGIONAL
           CertificateArn: arn:aws:acm:us-east-1:886639640718:certificate/df66fa56-ce78-4028-aaa2-e16ba17d7169
